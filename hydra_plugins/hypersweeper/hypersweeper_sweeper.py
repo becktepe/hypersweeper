@@ -221,6 +221,8 @@ class HypersweeperSweeper:
                 values += [infos[i].budget]
             if self.load_tf and self.iteration > 0:
                 values += [Path(self.checkpoint_dir) / f"{infos[i].load_path!s}{self.checkpoint_path_typing}"]
+            if self.checkpoint_tf:
+                values += [Path(self.checkpoint_dir) / f"{infos[i].save_path!s}{self.checkpoint_path_typing}"]
 
             if self.slurm:
                 names += ["hydra.launcher.timeout_min"]
@@ -232,9 +234,9 @@ class HypersweeperSweeper:
             if self.seeds:
                 for s in self.seeds:
                     local_values = values.copy()
-                    save_path = self.get_save_path(i, s)
-                    if self.checkpoint_tf:
-                        local_values += [save_path]
+                    # save_path = self.get_save_path(i, s)
+                    # if self.checkpoint_tf:
+                    #     local_values += [save_path]
 
                     job_overrides = tuple(self.global_overrides) + tuple(
                         f"{name}={val}"
@@ -253,9 +255,9 @@ class HypersweeperSweeper:
                 )
                 overrides.append(job_overrides)
             else:
-                save_path = self.get_save_path(i)
-                if self.checkpoint_tf:
-                    values += [save_path]
+                # save_path = self.get_save_path(i)
+                # if self.checkpoint_tf:
+                #     values += [save_path]
 
                 job_overrides = tuple(self.global_overrides) + tuple(
                     f"{name}={val}" for name, val in zip(names, values, strict=True)
@@ -444,6 +446,7 @@ class HypersweeperSweeper:
             budgets = []
             seeds = []
             loading_paths = []
+            saving_paths = []
             infos = []
             t = 0
             terminate = False
@@ -458,6 +461,8 @@ class HypersweeperSweeper:
                 seeds.append(info.seed)
                 if info.load_path is not None:
                     loading_paths.append(info.load_path)
+                if info.save_path is not None:
+                    saving_paths.append(info.save_path)
                 infos.append(info)
                 if not any(b is None for b in self.history["budget"]) and self.budget is not None:
                     budget_termination = sum(self.history["budget"]) >= self.budget

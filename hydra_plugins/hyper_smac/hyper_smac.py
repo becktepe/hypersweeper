@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -50,16 +51,72 @@ class HyperSMACAdapter:
     def __init__(self, smac):
         """Initialize the adapter."""
         self.smac = smac
+        self.config_ids = {}
+        self.budget_ids = {}
+        self.c_config_id = 0
+        self.c_budget_id = 0
+
+        self.last_budget = {}
+
+    @staticmethod
+    def config_to_key(config) -> str:
+        """Convert a configuration to a unique string key."""
+        return "$".join([f"{v}" for v in config.get_dictionary().values()])        
+    
+    def assign_budget_id(self, budget: float) -> int:
+        """Assign a unique ID to the budget."""
+        if budget in self.budget_ids:
+            return self.budget_ids[budget]
+        else:
+            self.budget_ids[budget] = self.c_budget_id
+            self.c_budget_id += 1
+            return self.budget_ids[budget]
+    
+    def get_load_and_save_paths(self, smac_info) -> tuple[str | None, str | None]:
+        """Get the load path for the configuration."""
+        config_key = self.config_to_key(smac_info.config)
+
+        # If we have not seen this budget before, 
+        # we have to assign a new ID
+        budget_id = self.assign_budget_id(smac_info.budget)
+
+        if config_key in self.config_ids:
+            # We have already executed this configuration
+            # so we need to load the model from the previous run
+            config_id = self.config_ids[config_key]
+            last_budget_id = self.last_budget[config_key]
+            load_path = f"budget_{last_budget_id}_config_{config_id}"
+        else:
+            self.config_ids[config_key] = self.c_config_id
+            self.c_config_id += 1
+
+            self.last_budget[config_key] = budget_id
+            load_path = "none"
+        
+        save_path = f"budget_{budget_id}_config_{self.config_ids[config_key]}"
+
+        return load_path, save_path
+        
+    def get_save_path(self, smac_info) -> str:
+        """Get the save path for the configuration."""
+        config_key = self.config_to_key(smac_info.config)
+        budget_id = self.last_budget[config_key]
+        config_id = self.config_ids[config_key]
+        return f"budget_{budget_id}_config_{config_id}"
 
     def ask(self):
         """Ask for the next configuration."""
         smac_info = self.smac.ask()
+        load_path, save_path = self.get_load_and_save_paths(smac_info)
+
         info = Info(
             config=smac_info.config,
             budget=smac_info.budget,
-            load_path=None,
+            save_path=save_path,
+            load_path=load_path,
             seed=smac_info.seed
         )
+
         return info, False
 
     def tell(self, info, value):
