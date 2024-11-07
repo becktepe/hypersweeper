@@ -23,14 +23,15 @@ from ConfigSpace.hyperparameters import (CategoricalHyperparameter,
                                          UniformFloatHyperparameter,
                                          UniformIntegerHyperparameter)
 
-from hydra_plugins.hypersweeper import Info
+from ..hyper_adapter import HyperAdapter
+from hydra_plugins.hypersweeper import Info, Result
 
 if TYPE_CHECKING:
     from ConfigSpace import ConfigurationSpace
     from neps.optimizers.base_optimizer import BaseOptimizer
 
 
-class HyperNEPS:
+class HyperNEPS(HyperAdapter):
     """NEPS."""
 
     def __init__(self, configspace: ConfigurationSpace, optimizer: BaseOptimizer, fidelity_variable: str) -> None:
@@ -42,7 +43,7 @@ class HyperNEPS:
         self.fidelity_variable = fidelity_variable
 
     def ask(self) -> tuple[Info, bool]:
-        """Randomly sample a configuration."""
+        """Sample a new configuration."""
         self.optimizer.load_results(
             previous_results={
                 config_id: report.to_config_result(self.optimizer.load_config)
@@ -76,14 +77,22 @@ class HyperNEPS:
         config = dict(config)
         budget = config.pop(self.fidelity_variable)
 
-        info = Info(dict(config), budget, config_id, None, None)
+        info = Info(
+            config=dict(config),
+            budget=budget,
+            config_id=config_id,
+        )
         return info, False
 
-    def tell(self, info: Info, value):
+    def tell(self, info: Info, result: Result) -> None:
         """Return the performance."""
         trial = self.pending_evaluations.pop(info.config_id)
 
-        trial.report = trial.create_success_report(value.performance)
+        performance = result.performance
+        if isinstance(performance, float) or (isinstance(performance, dict) and len(performance) == 1):
+            performance = next(iter(performance.values()))
+
+        trial.report = trial.create_success_report(result.performance)
 
         self.previous_results[info.config_id] = trial
 

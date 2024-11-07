@@ -15,20 +15,24 @@ activation: tanh
 seed: 42
 epochs: 10  # Default number of epochs
 neps_seed: 0
+eta: 3
+objectives: [loss, time]
+maximize: [false, false]
 
 load: null
 save: null
 
 hydra:
   sweeper:
-    n_trials: 207
     budget: 22_000
     budget_variable: epochs
     loading_variable: load
     saving_variable: save
     sweeper_kwargs:
+      objectives: ${objectives}
+      maximize: ${maximize}
       job_array_size_limit: 1
-      # seeds: [0, 1, 2]
+      #seeds: [0, 1, 2]
       load_tf: true
       checkpoint_tf: true
       optimizer_kwargs:
@@ -40,7 +44,7 @@ hydra:
           _target_: neps.optimizers.multi_fidelity_prior.priorband.PriorBand
           _partial_: true
           budget: ${hydra.sweeper.budget}
-          eta: 3
+          eta: ${eta}
           prior_confidence: medium
           initial_design_type: max_budget
           random_interleave_prob: 0.0
@@ -51,6 +55,12 @@ hydra:
           inc_mutation_rate: 0.5
           inc_mutation_std: 0.25
           inc_style: dynamic
+          mo_optimizer:
+            _target_: neps.optimizers.multi_objective.parego.ParEGO
+            objectives: ${objectives}
+            # objective_bounds: [(0, 1), (0, 1)]
+            eta: ${eta}
+          
     search_space:
       seed: ${neps_seed}
       hyperparameters:

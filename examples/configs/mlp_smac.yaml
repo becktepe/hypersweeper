@@ -7,9 +7,10 @@ defaults:
 
 hydra:
   sweeper:
-    n_trials: 10
+    n_trials: 21
     budget_variable: epochs
     sweeper_kwargs:
+      job_array_size_limit: 1
       optimizer_kwargs:
         smac_facade: 
           _target_: smac.facade.multi_fidelity_facade.MultiFidelityFacade

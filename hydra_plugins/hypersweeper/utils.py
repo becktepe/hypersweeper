@@ -16,20 +16,26 @@ from omegaconf import OmegaConf
 class Info:
     """Information for the sweeper."""
 
-    config: dict
+    config: dict | Configuration
     budget: float
-    save_path: str | None = None
-    load_path: str | None = None
     seed: int | None = None
+    config_id: int | str | None = None
 
 
 @dataclass
 class Result:
     """Evaluation result for the optimizer."""
 
-    info: Info = None
-    performance: float = None
-    cost: float = None
+    performance: dict
+    cost: float 
+    info: Info | None = None
+
+@dataclass
+class RunConfig:
+    """Configuration for a run."""
+
+    keys: list[str]
+    values: list[str]
 
 
 def maybe_convert_types(k: str, v: Any, configspace: ConfigurationSpace) -> Any | None:

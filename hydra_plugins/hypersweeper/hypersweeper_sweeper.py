@@ -15,7 +15,7 @@ import wandb
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 
-from hydra_plugins.hypersweeper.utils import Info, Result, read_warmstart_data
+from hydra_plugins.hypersweeper.utils import Info, Result, RunConfig, read_warmstart_data
 
 if TYPE_CHECKING:
     from ConfigSpace import Configuration, ConfigurationSpace
@@ -39,6 +39,8 @@ class HypersweeperSweeper:
         cs: ConfigurationSpace,
         budget: int = 1_000_000,
         n_trials: int = 1_000_000,
+        objectives: list[str] = ["loss"],
+        maximize: list[bool] = [False],
         optimizer_kwargs: dict[str, str] | None = None,
         seeds: list[int] | None = None,
         seed_keyword: str = "seed",
@@ -52,7 +54,6 @@ class HypersweeperSweeper:
         wandb_project: str | None = None,
         wandb_entity: str | None = None,
         wandb_tags: list[str] | None = None,
-        maximize: bool = False,
         deterministic: bool = True,
         checkpoint_tf: bool = False,
         load_tf: bool = False,
@@ -143,7 +144,10 @@ class HypersweeperSweeper:
                     self.global_overrides = self.global_overrides[:i] + self.global_overrides[i + 1 :]
                     break
 
+        assert len(objectives) == len(maximize), "The number of objectives and maximize flags must match."
+        self.objectives = objectives
         self.maximize = maximize
+
         self.slurm = slurm
         self.slurm_timeout = slurm_timeout
         if n_trials is not None:
@@ -158,7 +162,10 @@ class HypersweeperSweeper:
         self.iteration = 0
         self.opt_time = 0
         self.history = defaultdict(list)
-        self.incumbents = defaultdict(list)
+
+        # We need one incumbent dict for each objective
+        self.incumbents = defaultdict(lambda: defaultdict(list))
+
         self.deterministic = deterministic
         self.max_budget = max_budget
         self.checkpoint_path_typing = checkpoint_path_typing
@@ -169,6 +176,10 @@ class HypersweeperSweeper:
         self.optimizer.seeds = seeds
 
         self.warmstart_data: list[tuple[Info, Result]] = []
+
+        self._config_ids: dict[str, int] = {}
+        self._budget_ids: dict[float, int] = {}
+        self._last_budget: dict[int, int] = {}
 
         if warmstart_file:
             self.warmstart_data = read_warmstart_data(warmstart_filename=warmstart_file, search_space=self.configspace)
@@ -194,53 +205,53 @@ class HypersweeperSweeper:
 
         Returns:
         -------
-        List[float]
-            The resulting performances.
+        List[dict]
+            The resulting performances for each objective.
         List[float]
             The incurred costs.
         """
-        if self.load_tf and self.iteration > 0:
-            assert not any(p.load_path is None for p in infos), """
-            Load paths must be provided for all configurations
-            when working with checkpoints. If your optimizer does not support this,
-            set the 'load_tf' parameter of the sweeper to False."""
+        # TODO fix this. This is a temporary fix to make the code run.
+        # We only need this for PBT, in SMAC + HB we only have to load 
+        # for the second stage within each bracket
+
+        # if self.load_tf and self.iteration > 0:
+        #     assert not any(p.load_path is None for p in infos), """
+        #     Load paths must be provided for all configurations
+        #     when working with checkpoints. If your optimizer does not support this,
+        #     set the 'load_tf' parameter of the sweeper to False."""
 
         # Generate overrides
         overrides = []
         for i in range(len(infos)):
-            names = [*list(infos[i].config.keys())]
-            if self.budget_arg_name is not None:
-                names += [self.budget_arg_name]
-            if self.load_tf and self.iteration > 0:
-                names += [self.load_arg_name]
-            if self.checkpoint_tf:
-                names += [self.save_arg_name]
+            run_config = {}
 
-            values = [*list(infos[i].config.values())]
+            for k, v in infos[i].config.items():
+                run_config[k] = v
+
             if self.budget_arg_name is not None:
-                values += [infos[i].budget]
-            if self.load_tf and self.iteration > 0:
-                values += [Path(self.checkpoint_dir) / f"{infos[i].load_path!s}{self.checkpoint_path_typing}"]
-            if self.checkpoint_tf:
-                values += [Path(self.checkpoint_dir) / f"{infos[i].save_path!s}{self.checkpoint_path_typing}"]
+                run_config[self.budget_arg_name] = infos[i].budget
 
             if self.slurm:
-                names += ["hydra.launcher.timeout_min"]
                 optimized_timeout = (
-                    self.slurm_timeout * 1 / (self.total_budget // infos[i].budget) + 0.1 * self.slurm_timeout
+                    self.slurm_timeout * 1 / (self.max_budget // infos[i].budget) + 0.1 * self.slurm_timeout
                 )
-                values += [int(optimized_timeout)]
+                run_config["hydra.launcher.timeout_min"] = int(optimized_timeout)
 
             if self.seeds:
                 for s in self.seeds:
-                    local_values = values.copy()
-                    # save_path = self.get_save_path(i, s)
-                    # if self.checkpoint_tf:
-                    #     local_values += [save_path]
+                    local_run_config = run_config.copy()
+                    local_run_config[self.seed_keyword] = s
+
+                    load_path, save_path = self._get_load_and_save_path(infos[i], seed=s)
+
+                    if load_path and self.load_tf and self.iteration > 0:
+                        local_run_config[self.load_arg_name] = load_path
+
+                    if self.checkpoint_tf:
+                        local_run_config[self.save_arg_name] = save_path
 
                     job_overrides = tuple(self.global_overrides) + tuple(
-                        f"{name}={val}"
-                        for name, val in zip([*names, self.seed_keyword], [*local_values, s], strict=True)
+                        f"{k}={v}" for k, v in local_run_config.items()
                     )
                     overrides.append(job_overrides)
             elif not self.deterministic:
@@ -248,19 +259,31 @@ class HypersweeperSweeper:
                 For non-deterministic target functions, seeds must be provided.
                 If the optimizer you chose does not support this,
                 manually set the 'seeds' parameter of the sweeper to a list of seeds."""
-                save_path = self.get_save_path(i)
+                run_config[self.seed_keyword] = infos[i].seed
+
+                load_path, save_path = self._get_load_and_save_path(infos[i], seed=infos[i].seed)
+
+                if load_path and self.load_tf and self.iteration > 0:
+                    run_config[self.load_arg_name] = load_path
+
+                if self.checkpoint_tf:
+                    run_config[self.save_arg_name] = save_path
+
                 job_overrides = tuple(self.global_overrides) + tuple(
-                    f"{name}={val}"
-                    for name, val in zip([*names, self.seed_keyword], [*values, infos[i].seed], strict=True)
+                    f"{k}={v}" for k, v in run_config.items()
                 )
                 overrides.append(job_overrides)
             else:
-                # save_path = self.get_save_path(i)
-                # if self.checkpoint_tf:
-                #     values += [save_path]
+                load_path, save_path = self._get_load_and_save_path(infos[i])
+
+                if load_path and self.load_tf and self.iteration > 0:
+                    run_config[self.load_arg_name] = load_path
+
+                if self.checkpoint_tf:
+                    run_config[self.save_arg_name] = save_path
 
                 job_overrides = tuple(self.global_overrides) + tuple(
-                    f"{name}={val}" for name, val in zip(names, values, strict=True)
+                    f"{k}={v}" for k, v in run_config.items()
                 )
                 overrides.append(job_overrides)
 
@@ -272,59 +295,42 @@ class HypersweeperSweeper:
         else:
             costs = [infos[i].budget for i in range(len(res))]
 
-        performances = []
+        objective_performances = []
         if self.seeds and self.deterministic:
             # When we have seeds, we want to have a list of performances for each config
             n_seeds = len(self.seeds)
             for config_idx in range(len(overrides) // n_seeds):
-                performances.append([res[config_idx * n_seeds + seed_idx].return_value for seed_idx in range(n_seeds)])
+                objective_performances.append([res[config_idx * n_seeds + seed_idx].return_value for seed_idx in range(n_seeds)])
                 self.trials_run += 1
         else:
             for j in range(len(overrides)):
-                performances.append(res[j].return_value)
+                objective_performances.append(res[j].return_value)
                 self.trials_run += 1
-        return performances, costs
+        return objective_performances, costs
 
-    def get_save_path(self, config_id, seed=None):
-        """Get the save path for checkpoints.
-
-        Returns:
-        -------
-        Path
-            The save path
-        """
-        if self.seeds:
-            save_path = (
-                Path(self.checkpoint_dir)
-                / f"iteration_{self.iteration}_id_{config_id}_s{seed}{self.checkpoint_path_typing}"
-            )
-        elif not self.deterministic:
-            save_path = (
-                Path(self.checkpoint_dir) / f"iteration_{self.iteration}_id_{config_id}{self.checkpoint_path_typing}"
-            )
-        else:
-            save_path = (
-                Path(self.checkpoint_dir) / f"iteration_{self.iteration}_id_{config_id}{self.checkpoint_path_typing}"
-            )
-        return save_path
-
-    def get_incumbent(self) -> tuple[Configuration | dict, float]:
+    def get_incumbent(self) -> tuple[Configuration | dict, dict]:
         """Get the best sequence of configurations so far.
 
         Returns:
         -------
         List[Configuration]
             Sequence of best hyperparameter configs
-        Float
+        Dict
             Best performance value
         """
-        if self.maximize:
-            best_current_id = np.argmax(self.history["performance"])
-        else:
-            best_current_id = np.argmin(self.history["performance"])
-        inc_performance = self.history["performance"][best_current_id]
-        inc_config = self.history["config"][best_current_id]
-        return inc_config, inc_performance
+        incubments = {}
+        configs = {}
+
+        for objective_id, (objective, maximize) in enumerate(zip(self.objectives, self.maximize)):
+            if maximize:
+                best_run_id = np.argmax(self.history[f"o{objective_id}_{objective}"])
+            else:
+                best_run_id = np.argmin(self.history[f"o{objective_id}_{objective}"])
+
+            incubments[objective] = self.history[f"o{objective_id}_{objective}"][best_run_id]
+            configs[objective] = self.history["config"][best_run_id]
+
+        return configs, incubments
 
     def _write_csv(self, data: dict, filename: str) -> None:
         """Write a dictionary to a csv file.
@@ -339,8 +345,8 @@ class HypersweeperSweeper:
         dataframe = pd.DataFrame(data)
 
         dataframes_to_concat = []
-        if "config_id" not in dataframe.columns:
-            dataframes_to_concat += [pd.DataFrame(np.arange(len(dataframe)), columns=["config_id"])]
+        if "run_id" not in dataframe.columns:
+            dataframes_to_concat += [pd.DataFrame(np.arange(len(dataframe)), columns=["run_id"])]
 
         # Since some configs might not include values for all hyperparameters
         # (e.g. when using conditions), we need to make sure that the dataframe
@@ -354,13 +360,16 @@ class HypersweeperSweeper:
         full_dataframe.to_csv(Path(self.output_dir) / f"{filename}.csv", index=False)
 
     def write_history(
-        self, performances: list[list[float]] | list[float], configs: list[Configuration], budgets: list[float]
+        self,
+        performances: list[list[dict]] | list[dict],
+        configs: list[Configuration],
+        budgets: list[float],
     ) -> None:
         """Write the history of the optimization to a csv file.
 
         Parameters
         ----------
-        performances: Union[list[list[float]], list[float]]
+        performances: Union[list[list[dict]], list[dict]]
             A list of the latest agent performances, either one value for each config or a list of values for each seed
         configs: list[Configuration],
             A list of the recent configs
@@ -368,16 +377,25 @@ class HypersweeperSweeper:
             A list of the recent budgets
         """
         for i in range(len(configs)):
+            self.history["config_id"].append(self._get_config_id(dict(configs[i]))[0])
             self.history["config"].append(configs[i])
             if self.seeds:
                 # In this case we have a list of performances for each config,
                 # one for each seed
                 assert isinstance(performances[i], list)
-                self.history["performance"].append(np.mean(performances[i]))
-                for seed_idx, seed in enumerate(self.seeds):
-                    self.history[f"performance_{self.seed_keyword}_{seed}"].append(performances[i][seed_idx])
+
+                for objective_id, objective in enumerate(self.objectives):
+                    # The mean is calculated over the same objective of didfferent seeds
+                    self.history[f"o{objective_id}_{objective}"].append(np.mean([p[objective] for p in performances[i]]))
+
+                    for seed_idx, seed in enumerate(self.seeds):
+                        self.history[f"o{objective_id}_{objective}_{self.seed_keyword}_{seed}"].append(performances[i][seed_idx][objective])
             else:
-                self.history["performance"].append(performances[i])
+                assert isinstance(performances[i], dict)
+
+                for objective_id, objective in enumerate(self.objectives):
+                    self.history[f"o{objective_id}_{objective}"].append(performances[i][objective])
+
             if budgets[i] is not None:
                 self.history["budget"].append(budgets[i])
             else:
@@ -387,32 +405,104 @@ class HypersweeperSweeper:
 
     def write_incumbents(self) -> None:
         """Write the incumbent configurations to a csv file."""
-        if self.maximize:
-            best_config_id = np.argmax(self.history["performance"])
-        else:
-            best_config_id = np.argmin(self.history["performance"])
-        self.incumbents["config_id"].append(best_config_id)
-        self.incumbents["config"].append(self.history["config"][best_config_id])
-        self.incumbents["performance"].append(self.history["performance"][best_config_id])
-        self.incumbents["budget"].append(self.history["budget"][best_config_id])
-        try:
-            self.incumbents["budget_used"].append(sum(self.history["budget"]))
-        except:  # noqa:E722
-            self.incumbents["budget_used"].append(self.trials_run)
-        self.incumbents["total_wallclock_time"].append(time.time() - self.start)
-        self.incumbents["total_optimization_time"].append(self.opt_time)
+        for objective_id, (objective, maximize) in enumerate(zip(self.objectives, self.maximize)):
+            if maximize:
+                best_run_id = np.argmax(self.history[f"o{objective_id}_{objective}"])
+            else:
+                best_run_id = np.argmin(self.history[f"o{objective_id}_{objective}"])
 
-        self._write_csv(self.incumbents, "incumbent")
+            self.incumbents[objective_id]["run_id"].append(best_run_id)
+            self.incumbents[objective_id]["config_id"].append(self.history["config_id"][best_run_id])
+            self.incumbents[objective_id]["config"].append(self.history["config"][best_run_id])
+            self.incumbents[objective_id][f"o{objective_id}_{objective}"].append(self.history[f"o{objective_id}_{objective}"][best_run_id])
+            self.incumbents[objective_id]["budget"].append(self.history["budget"][best_run_id])
+            try:
+                self.incumbents[objective_id]["budget_used"].append(sum(self.history["budget"]))
+            except:  # noqa:E722
+                self.incumbents[objective_id]["budget_used"].append(self.trials_run)
+            self.incumbents[objective_id]["total_wallclock_time"].append(time.time() - self.start)
+            self.incumbents[objective_id]["total_optimization_time"].append(self.opt_time)
+
+            self._write_csv(self.incumbents[objective_id], f"incumbent_{objective}")
 
         if self.wandb_project:
             stats = {}
             stats["iteration"] = self.iteration
-            stats["total_optimization_time"] = self.incumbents["total_optimization_time"][-1]
-            stats["incumbent_performance"] = self.incumbents["performance"][-1]
-            best_config = self.incumbents["config"][-1]
+            stats["total_optimization_time"] = self.incumbents[objective_id]["total_optimization_time"][-1]
+            stats["incumbent_performance"] = self.incumbents[objective_id]["performance"][-1]
+            best_config = self.incumbents[objective_id]["config"][-1]
             for n in best_config:
                 stats[f"incumbent_{n}"] = best_config.get(n)
             wandb.log(stats)
+
+    def _get_config_id(self, config: dict) -> tuple[int, bool]:
+        """Get the id of a configuration.
+
+        Parameters
+        ----------
+        config: dict
+            The configuration to get the id of
+
+        Returns:
+        -------
+        int, bool
+            The id of the configuration and whether it was already seen
+        """
+        # This is a bit hacky, but we need to convert the config to a unique string
+        config_str = "$".join([f"{v}" for v in config.values()])    
+
+        if config_str not in self._config_ids:
+            self._config_ids[config_str] = len(self._config_ids)
+            return self._config_ids[config_str], True
+        else:
+            return self._config_ids[config_str], False
+    
+    def _get_budget_id(self, budget: float) -> int:
+        """Get the id of a budget.
+
+        Parameters
+        ----------
+        budget: float
+            The budget to get the id of
+
+        Returns:
+        -------
+        int
+            The id of the budget
+        """
+        if budget not in self._budget_ids:
+            self._budget_ids[budget] = len(self._budget_ids)
+        
+        return self._budget_ids[budget]
+    
+    def _get_load_and_save_path(self, info: Info, seed: int | None = None) -> tuple[Path | None, Path]:
+        """Get the load path for the configuration."""
+        config_id, unseen_config = self._get_config_id(info.config)
+        budget_id = self._get_budget_id(info.budget)
+
+        if unseen_config:
+            load_path = None
+        else:
+            # We have already executed this configuration
+            # so we need to load the model from the previous run
+            last_budget_id = self._last_budget[config_id]
+            load_path = f"budget_{last_budget_id}_config_{config_id}"
+            if seed is not None:
+                load_path = f"{load_path}_s{seed}"
+
+            load_path = f"{load_path}{self.checkpoint_path_typing}"
+
+        self._last_budget[config_id] = budget_id
+        
+        save_path = f"budget_{budget_id}_config_{config_id}"
+        if seed is not None:
+            save_path = f"{save_path}_s{seed}"
+        save_path = f"{save_path}{self.checkpoint_path_typing}"
+
+        load_path = self.checkpoint_dir / load_path if load_path else None
+        save_path = self.checkpoint_dir / save_path
+
+        return load_path, save_path
 
     def run(self, verbose=False):
         """Actual optimization loop.
@@ -444,52 +534,55 @@ class HypersweeperSweeper:
             opt_time_start = time.time()
             configs = []
             budgets = []
-            seeds = []
-            loading_paths = []
-            saving_paths = []
             infos = []
             t = 0
             terminate = False
             while t < self.max_parallel and not terminate and not trial_termination and not budget_termination:
                 info, terminate = self.optimizer.ask()
+
                 configs.append(info.config)
                 t += 1
                 if info.budget is not None:
                     budgets.append(info.budget)
                 else:
                     budgets.append(self.max_budget)
-                seeds.append(info.seed)
-                if info.load_path is not None:
-                    loading_paths.append(info.load_path)
-                if info.save_path is not None:
-                    saving_paths.append(info.save_path)
                 infos.append(info)
                 if not any(b is None for b in self.history["budget"]) and self.budget is not None:
-                    budget_termination = sum(self.history["budget"]) >= self.budget
+                    budget_termination = sum(self.history["budget"]) + sum(budgets) >= self.budget
                 if self.n_trials is not None:
                     trial_termination = self.trials_run + len(configs) >= self.n_trials
             self.opt_time += time.time() - opt_time_start
-            performances, costs = self.run_configs(
+            objective_performances, costs = self.run_configs(
                 infos
-                # configs, budgets, seeds, loading_paths
             )
             opt_time_start = time.time()
-            if self.seeds and self.deterministic:
-                seeds = np.zeros(len(performances))
-            for info, performance, cost in zip(infos, performances, costs, strict=True):
-                run_performance = float(np.mean(performance)) if self.seeds else performance
+            for info, performance, cost in zip(infos, objective_performances, costs, strict=True):
+                logged_performance = {}
 
-                logged_performance = -run_performance if self.maximize else run_performance
+                if self.seeds:
+                    assert isinstance(performance, list)
+                    for objective, maxizime in zip(self.objectives, self.maximize):
+                        performances = [p[objective] for p in performance]
+                        logged_performance[objective] = np.mean(performances) if maxizime else -np.mean(performances)
+                else:
+                    assert isinstance(performance, dict)
+                    for objective, maxizime in zip(self.objectives, self.maximize):
+                        logged_performance[objective] = performance[objective] if maxizime else -performance[objective]
+
                 value = Result(performance=logged_performance, cost=cost)
-                self.optimizer.tell(info=info, value=value)
+                self.optimizer.tell(info=info, result=value)
 
-            self.write_history(performances, configs, budgets)
+            self.write_history(
+                performances=objective_performances,
+                configs=configs,
+                budgets=budgets,
+            )
             self.write_incumbents()
 
             if verbose:
                 log.info(f"Finished Iteration {self.iteration}!")
                 _, inc_performance = self.get_incumbent()
-                log.info(f"Current incumbent has a performance of {np.round(inc_performance, decimals=2)}.")
+                log.info(f"Current incumbent have performances of { {k: np.round(v, decimals=2) for k, v in inc_performance.items() }}.")
 
             self.opt_time += time.time() - opt_time_start
             done = trial_termination or budget_termination
@@ -499,8 +592,8 @@ class HypersweeperSweeper:
         inc_config, inc_performance = self.get_incumbent()
         if verbose:
             log.info(
-                f"Finished Sweep! Total duration was {np.round(total_time, decimals=2)}s, \
-                    incumbent had a performance of {np.round(inc_performance, decimals=2)}"
+                f"Finished Sweep! Total duration was {np.round(total_time, decimals=2)}s," \
+                "incumbents had a performance of { {k: np.round(v, decimals=2) for k, v in inc_performance.items() }}."
             )
             log.info(f"The incumbent configuration is {inc_config}")
-        return self.incumbents[-1]
+        return [inc_config[objective] for objective in self.objectives]

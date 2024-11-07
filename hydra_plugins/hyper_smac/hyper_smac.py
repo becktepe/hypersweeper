@@ -11,10 +11,11 @@ from hydra.utils import get_class
 from omegaconf import DictConfig, OmegaConf
 from smac import Scenario
 from smac.runhistory.dataclasses import TrialInfo, TrialValue
+from ..hyper_adapter import HyperAdapter
 
 from hydra_plugins.hypersweeper.search_space_encoding import \
     search_space_to_config_space
-from hydra_plugins.hypersweeper.utils import Info, convert_to_configuration
+from hydra_plugins.hypersweeper.utils import Info, Result, convert_to_configuration
 
 if TYPE_CHECKING:
     from ConfigSpace import Configuration
@@ -45,84 +46,31 @@ OmegaConf.register_new_resolver("get_class", get_class, replace=True)
 OmegaConf.register_new_resolver("read_additional_configs", read_additional_configs, replace=True)
 
 
-class HyperSMACAdapter:
+class HyperSMACAdapter(HyperAdapter):
     """Adapt SMAC ask/tell interface to HyperSweeper ask/tell interface."""
 
     def __init__(self, smac):
         """Initialize the adapter."""
         self.smac = smac
-        self.config_ids = {}
-        self.budget_ids = {}
-        self.c_config_id = 0
-        self.c_budget_id = 0
-
-        self.last_budget = {}
-
-    @staticmethod
-    def config_to_key(config) -> str:
-        """Convert a configuration to a unique string key."""
-        return "$".join([f"{v}" for v in config.get_dictionary().values()])        
     
-    def assign_budget_id(self, budget: float) -> int:
-        """Assign a unique ID to the budget."""
-        if budget in self.budget_ids:
-            return self.budget_ids[budget]
-        else:
-            self.budget_ids[budget] = self.c_budget_id
-            self.c_budget_id += 1
-            return self.budget_ids[budget]
-    
-    def get_load_and_save_paths(self, smac_info) -> tuple[str | None, str | None]:
-        """Get the load path for the configuration."""
-        config_key = self.config_to_key(smac_info.config)
-
-        # If we have not seen this budget before, 
-        # we have to assign a new ID
-        budget_id = self.assign_budget_id(smac_info.budget)
-
-        if config_key in self.config_ids:
-            # We have already executed this configuration
-            # so we need to load the model from the previous run
-            config_id = self.config_ids[config_key]
-            last_budget_id = self.last_budget[config_key]
-            load_path = f"budget_{last_budget_id}_config_{config_id}"
-        else:
-            self.config_ids[config_key] = self.c_config_id
-            self.c_config_id += 1
-
-            self.last_budget[config_key] = budget_id
-            load_path = "none"
-        
-        save_path = f"budget_{budget_id}_config_{self.config_ids[config_key]}"
-
-        return load_path, save_path
-        
-    def get_save_path(self, smac_info) -> str:
-        """Get the save path for the configuration."""
-        config_key = self.config_to_key(smac_info.config)
-        budget_id = self.last_budget[config_key]
-        config_id = self.config_ids[config_key]
-        return f"budget_{budget_id}_config_{config_id}"
-
-    def ask(self):
+    def ask(self) -> tuple[Info, bool]:
         """Ask for the next configuration."""
         smac_info = self.smac.ask()
-        load_path, save_path = self.get_load_and_save_paths(smac_info)
 
         info = Info(
             config=smac_info.config,
             budget=smac_info.budget,
-            save_path=save_path,
-            load_path=load_path,
             seed=smac_info.seed
         )
 
         return info, False
 
-    def tell(self, info, value):
+    def tell(self, info: Info, result: Result) -> None:
         """Tell the result of the configuration."""
+        assert isinstance(info.config, Configuration)
+
         smac_info = TrialInfo(info.config, seed=info.seed, budget=info.budget)
-        smac_value = TrialValue(time=value.cost, cost=value.performance)
+        smac_value = TrialValue(time=result.cost, cost=result.performance)
         self.smac.tell(smac_info, smac_value)
 
 
