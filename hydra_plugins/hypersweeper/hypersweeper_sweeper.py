@@ -504,12 +504,12 @@ class HypersweeperSweeper:
             save_path: str,
             seed: int | None = None
         ) -> tuple[Path | None, Path]:
-            if seed:
+            if seed is not None:
                 final_load_path = self.checkpoint_dir / f"{load_path}_{self.seed_keyword}_{seed}{self.checkpoint_path_typing}" if load_path else None
                 final_save_path = self.checkpoint_dir / f"{save_path}_{self.seed_keyword}_{seed}{self.checkpoint_path_typing}"
             else:
-                final_load_path = self.checkpoint_dir / f"{load_path}_{self.checkpoint_path_typing}" if load_path else None
-                final_save_path = self.checkpoint_dir / f"{save_path}_{self.checkpoint_path_typing}"
+                final_load_path = self.checkpoint_dir / f"{load_path}{self.checkpoint_path_typing}" if load_path else None
+                final_save_path = self.checkpoint_dir / f"{save_path}{self.checkpoint_path_typing}"
 
             return final_load_path, final_save_path
 
