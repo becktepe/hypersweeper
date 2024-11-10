@@ -150,6 +150,7 @@ class HypersweeperSweeper:
 
         self.slurm = slurm
         self.slurm_timeout = slurm_timeout
+
         if n_trials is not None:
             self.max_parallel = min(job_array_size_limit, max(1, int(max_parallelization * n_trials)))
         else:
@@ -233,22 +234,25 @@ class HypersweeperSweeper:
 
             if self.slurm:
                 optimized_timeout = (
-                    self.slurm_timeout * 1 / (self.max_budget // infos[i].budget) + 0.1 * self.slurm_timeout
+                    self.slurm_timeout * (infos[i].budget / self.max_budget) + 0.1 * self.slurm_timeout
                 )
-                run_config["hydra.launcher.timeout_min"] = int(optimized_timeout)
+                self.launcher.params["timeout_min"] = int(optimized_timeout)
+
+            # The basic load and save paths are the same for all seeeds
+            load_path, save_path = self._get_load_and_save_path(infos[i])
 
             if self.seeds:
                 for s in self.seeds:
                     local_run_config = run_config.copy()
                     local_run_config[self.seed_keyword] = s
 
-                    load_path, save_path = self._get_load_and_save_path(infos[i], seed=s)
+                    actual_load_path, actual_save_path = self._get_actual_load_and_save_path(load_path, save_path, seed=s)
 
-                    if load_path and self.load_tf and self.iteration > 0:
-                        local_run_config[self.load_arg_name] = load_path
+                    if actual_load_path and self.load_tf:
+                        local_run_config[self.load_arg_name] = actual_load_path
 
                     if self.checkpoint_tf:
-                        local_run_config[self.save_arg_name] = save_path
+                        local_run_config[self.save_arg_name] = actual_save_path
 
                     job_overrides = tuple(self.global_overrides) + tuple(
                         f"{k}={v}" for k, v in local_run_config.items()
@@ -261,26 +265,26 @@ class HypersweeperSweeper:
                 manually set the 'seeds' parameter of the sweeper to a list of seeds."""
                 run_config[self.seed_keyword] = infos[i].seed
 
-                load_path, save_path = self._get_load_and_save_path(infos[i], seed=infos[i].seed)
+                actual_load_path, actual_save_path = self._get_actual_load_and_save_path(load_path, save_path, seed=infos[i].seed)
 
-                if load_path and self.load_tf and self.iteration > 0:
-                    run_config[self.load_arg_name] = load_path
+                if actual_load_path and self.load_tf:
+                    run_config[self.load_arg_name] = actual_load_path
 
                 if self.checkpoint_tf:
-                    run_config[self.save_arg_name] = save_path
+                    run_config[self.save_arg_name] = actual_save_path
 
                 job_overrides = tuple(self.global_overrides) + tuple(
                     f"{k}={v}" for k, v in run_config.items()
                 )
                 overrides.append(job_overrides)
             else:
-                load_path, save_path = self._get_load_and_save_path(infos[i])
+                actual_load_path, actual_save_path = self._get_actual_load_and_save_path(load_path, save_path)
 
-                if load_path and self.load_tf and self.iteration > 0:
-                    run_config[self.load_arg_name] = load_path
+                if actual_load_path and self.load_tf:
+                    run_config[self.load_arg_name] = actual_load_path
 
                 if self.checkpoint_tf:
-                    run_config[self.save_arg_name] = save_path
+                    run_config[self.save_arg_name] = actual_save_path
 
                 job_overrides = tuple(self.global_overrides) + tuple(
                     f"{k}={v}" for k, v in run_config.items()
@@ -475,9 +479,9 @@ class HypersweeperSweeper:
         
         return self._budget_ids[budget]
     
-    def _get_load_and_save_path(self, info: Info, seed: int | None = None) -> tuple[Path | None, Path]:
+    def _get_load_and_save_path(self, info: Info) -> tuple[str | None, str]:
         """Get the load path for the configuration."""
-        config_id, unseen_config = self._get_config_id(info.config)
+        config_id, unseen_config = self._get_config_id(dict(info.config))
         budget_id = self._get_budget_id(info.budget)
 
         if unseen_config:
@@ -487,22 +491,28 @@ class HypersweeperSweeper:
             # so we need to load the model from the previous run
             last_budget_id = self._last_budget[config_id]
             load_path = f"budget_{last_budget_id}_config_{config_id}"
-            if seed is not None:
-                load_path = f"{load_path}_s{seed}"
-
-            load_path = f"{load_path}{self.checkpoint_path_typing}"
 
         self._last_budget[config_id] = budget_id
         
         save_path = f"budget_{budget_id}_config_{config_id}"
-        if seed is not None:
-            save_path = f"{save_path}_s{seed}"
-        save_path = f"{save_path}{self.checkpoint_path_typing}"
-
-        load_path = self.checkpoint_dir / load_path if load_path else None
-        save_path = self.checkpoint_dir / save_path
 
         return load_path, save_path
+    
+    def _get_actual_load_and_save_path(
+            self,
+            load_path: str | None,
+            save_path: str,
+            seed: int | None = None
+        ) -> tuple[Path | None, Path]:
+            if seed:
+                final_load_path = self.checkpoint_dir / f"{load_path}_{self.seed_keyword}_{seed}{self.checkpoint_path_typing}" if load_path else None
+                final_save_path = self.checkpoint_dir / f"{save_path}_{self.seed_keyword}_{seed}{self.checkpoint_path_typing}"
+            else:
+                final_load_path = self.checkpoint_dir / f"{load_path}_{self.checkpoint_path_typing}" if load_path else None
+                final_save_path = self.checkpoint_dir / f"{save_path}_{self.checkpoint_path_typing}"
+
+            return final_load_path, final_save_path
+
 
     def run(self, verbose=False):
         """Actual optimization loop.
