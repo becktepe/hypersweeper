@@ -25,6 +25,8 @@ from ConfigSpace.hyperparameters import (CategoricalHyperparameter,
 
 from ..hyper_adapter import HyperAdapter
 from hydra_plugins.hypersweeper import Info, Result
+from hydra_plugins.hypersweeper.utils import dynamic_import_and_call
+import hydra
 
 if TYPE_CHECKING:
     from ConfigSpace import ConfigurationSpace
@@ -74,11 +76,13 @@ class HyperNEPS(HyperAdapter):
 
         self.pending_evaluations[config_id] = trial
 
-        config = dict(config)
-        budget = config.pop(self.fidelity_variable)
+        config_dict = dict(config)
+        budget = config_dict.pop(self.fidelity_variable)
+        if "architecture" in config:
+            config_dict["architecture"] = f'"{config["architecture"].string_tree}"'
 
         info = Info(
-            config=dict(config),
+            config=config_dict,
             budget=budget,
             config_id=config_id,
         )
@@ -106,18 +110,21 @@ def make_neps(configspace, hyper_neps_args):
 
     dict_search_space = get_dict_from_configspace(configspace)
 
-    dict_search_space[hyper_neps_args["fidelity_variable"]] = neps.FloatParameter(
-        lower=hyper_neps_args["min_budget"], upper=hyper_neps_args["max_budget"], is_fidelity=True
-    )
+    if "fidelity_variable" in hyper_neps_args:
+        dict_search_space[hyper_neps_args["fidelity_variable"]] = neps.FloatParameter(
+            lower=hyper_neps_args["min_budget"], upper=hyper_neps_args["max_budget"], is_fidelity=True
+        )
+
+    if "architecture" in hyper_neps_args:
+        arch_parameter = dynamic_import_and_call(hyper_neps_args["architecture"])
+        arch_parameter.default = hyper_neps_args["architecture_default"]
+        dict_search_space["architecture"] = arch_parameter
 
     neps_search_space = neps.search_spaces.SearchSpace(**dict_search_space)
 
     optimizer = hyper_neps_args["optimizer"](
         pipeline_space=neps_search_space,
     )
-
-    print("Budget levels for NEPS:")
-    check_budget_levels(hyper_neps_args["min_budget"], hyper_neps_args["max_budget"], optimizer.eta)
 
     return HyperNEPS(
         configspace=configspace, optimizer=optimizer, fidelity_variable=hyper_neps_args["fidelity_variable"]

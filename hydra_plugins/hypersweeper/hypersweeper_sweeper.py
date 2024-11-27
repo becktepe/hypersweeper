@@ -356,6 +356,10 @@ class HypersweeperSweeper:
         # (e.g. when using conditions), we need to make sure that the dataframe
         # has all hyperparameters as columns
         hyperparameters = [str(hp) for hp in list(self.configspace.keys())]
+
+        if "architecture" in data["config"][0]:
+            hyperparameters.append("architecture")
+
         configs_df = pd.DataFrame(list(dataframe["config"]), columns=hyperparameters)
 
         # Now we merge the basic dataframe with the configs
