@@ -149,7 +149,7 @@ class HypersweeperSweeper:
         self.maximize = maximize
 
         self.slurm = slurm
-        self.slurm_timeout = slurm_timeout
+        self.slurm_timeout = slurm_timeout * 1.5
 
         if n_trials is not None:
             self.max_parallel = min(job_array_size_limit, max(1, int(max_parallelization * n_trials)))
@@ -573,11 +573,11 @@ class HypersweeperSweeper:
                     assert isinstance(performance, list)
                     for objective, maxizime in zip(self.objectives, self.maximize):
                         performances = [p[objective] for p in performance]
-                        logged_performance[objective] = np.mean(performances) if maxizime else -np.mean(performances)
+                        logged_performance[objective] = -np.mean(performances) if maxizime else np.mean(performances)
                 else:
                     assert isinstance(performance, dict)
                     for objective, maxizime in zip(self.objectives, self.maximize):
-                        logged_performance[objective] = performance[objective] if maxizime else -performance[objective]
+                        logged_performance[objective] = -performance[objective] if maxizime else performance[objective]
 
                 value = Result(performance=logged_performance, cost=cost)
                 self.optimizer.tell(info=info, result=value)

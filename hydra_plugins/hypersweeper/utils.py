@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from ConfigSpace import Configuration, ConfigurationSpace
 from omegaconf import OmegaConf
-
+import importlib
 
 @dataclass
 class Info:
@@ -126,3 +126,11 @@ if __name__ == "__main__":
         warmstart_filename="/home/numina/Documents/repos/ARLBench/runscripts/configs/initial_design/cc_cartpole_dqn.csv",
         search_space=search_space,
     )
+
+
+def dynamic_import_and_call(target_function):
+    """Dynamically import and call a function from a fully qualified name."""
+    module_name, func_name = target_function.rsplit(".", 1)
+    module = importlib.import_module(module_name)
+    func = getattr(module, func_name)
+    return func()
