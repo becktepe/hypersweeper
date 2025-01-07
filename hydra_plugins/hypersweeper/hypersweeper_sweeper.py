@@ -149,7 +149,7 @@ class HypersweeperSweeper:
         self.maximize = maximize
 
         self.slurm = slurm
-        self.slurm_timeout = slurm_timeout * 1.5
+        self.slurm_timeout = slurm_timeout * 2
 
         if n_trials is not None:
             self.max_parallel = min(job_array_size_limit, max(1, int(max_parallelization * n_trials)))
@@ -236,6 +236,8 @@ class HypersweeperSweeper:
                 optimized_timeout = (
                     self.slurm_timeout * (infos[i].budget / self.max_budget) + 0.1 * self.slurm_timeout
                 )
+                # The maximum allowed time is 3 days
+                optimized_timeout = min(optimized_timeout, 3 * 24 * 60)
                 self.launcher.params["timeout_min"] = int(optimized_timeout)
 
             # The basic load and save paths are the same for all seeeds
