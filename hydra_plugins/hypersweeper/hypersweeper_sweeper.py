@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import logging
 import time
 from collections import defaultdict
@@ -59,6 +60,7 @@ class HypersweeperSweeper:
         load_tf: bool = False,
         checkpoint_path_typing: str = ".pt",
         warmstart_file: str | None = None,
+        env_vars: dict[str, str] | None = None,
     ):
         """Ask-Tell sweeper for hyperparameter optimization.
 
@@ -118,6 +120,10 @@ class HypersweeperSweeper:
         -------
         None
         """
+        if env_vars:
+            for k, v in env_vars.items():
+                os.environ[k] = v
+
         if optimizer_kwargs is None:
             optimizer_kwargs = {}
         if wandb_tags is None:
