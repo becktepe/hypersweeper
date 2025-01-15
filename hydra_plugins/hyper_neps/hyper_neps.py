@@ -8,6 +8,10 @@ import random
 import time
 from pathlib import Path
 
+import neps.search_spaces.architecture
+import neps.search_spaces.architecture.cfg
+import neps.search_spaces.architecture.cfg_parameter
+from neps.search_spaces.architecture.cfg_parameter import CFGParameter
 import numpy as np
 from neps.runtime import Trial
 
@@ -78,8 +82,10 @@ class HyperNEPS(HyperAdapter):
 
         config_dict = dict(config)
         budget = config_dict.pop(self.fidelity_variable)
+        
+        # For the CFGArchitecture we need to ensure that it is pure string
         if "architecture" in config:
-            config_dict["architecture"] = f'"{config["architecture"].string_tree}"'
+            config_dict["architecture"] = f'"{config["architecture"]}"' 
 
         info = Info(
             config=config_dict,
@@ -116,8 +122,9 @@ def make_neps(configspace, hyper_neps_args):
         )
 
     if "architecture" in hyper_neps_args:
-        arch_parameter = dynamic_import_and_call(hyper_neps_args["architecture"])
-        arch_parameter.default = hyper_neps_args["architecture_default"]
+        arch_parameter: CFGParameter = dynamic_import_and_call(hyper_neps_args["architecture"], **hyper_neps_args["architecture_kwargs"])
+        default_architecture = dynamic_import_and_call(hyper_neps_args["architecture_default"], **hyper_neps_args["architecture_default_kwargs"])
+        arch_parameter.set_default(default_architecture)
         dict_search_space["architecture"] = arch_parameter
 
     neps_search_space = neps.search_spaces.SearchSpace(**dict_search_space)

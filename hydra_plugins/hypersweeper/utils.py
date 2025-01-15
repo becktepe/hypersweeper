@@ -128,9 +128,9 @@ if __name__ == "__main__":
     )
 
 
-def dynamic_import_and_call(target_function):
+def dynamic_import_and_call(target_function, *args, **kwargs):
     """Dynamically import and call a function from a fully qualified name."""
     module_name, func_name = target_function.rsplit(".", 1)
     module = importlib.import_module(module_name)
     func = getattr(module, func_name)
-    return func()
+    return func(*args, **kwargs)
