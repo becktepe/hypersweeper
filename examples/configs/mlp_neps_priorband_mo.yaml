@@ -37,12 +37,14 @@ hydra:
       checkpoint_tf: true
       optimizer_kwargs:
         fidelity_variable: ${hydra.sweeper.budget_variable}
-        min_budget: 10
+        min_budget: 100
         max_budget: 1000
         seed: ${neps_seed}
         optimizer:
-          _target_: neps.optimizers.multi_fidelity_prior.priorband.PriorBand
+          _target_: neps.optimizers.multi_objective.mo_priorband.MOPriorBand
           _partial_: true
+          objectives: ${objectives}
+          incumbent_selection: hypervolume
           budget: ${hydra.sweeper.budget}
           eta: ${eta}
           prior_confidence: medium
@@ -55,11 +57,6 @@ hydra:
           inc_mutation_rate: 0.5
           inc_mutation_std: 0.25
           inc_style: dynamic
-          mo_optimizer:
-            _target_: neps.optimizers.multi_objective.parego.ParEGO
-            objectives: ${objectives}
-            # objective_bounds: [(0, 1), (0, 1)]
-            eta: ${eta}
           
     search_space:
       seed: ${neps_seed}
@@ -116,3 +113,5 @@ hydra:
     dir: ./tmp/${now:%Y-%m-%d}/${now:%H-%M-%S}
   sweep:
     dir: ./tmp/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  job:
+    chdir: true

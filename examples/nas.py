@@ -3,14 +3,19 @@ from __future__ import annotations
 from torch import nn
 
 import hydra
-from neps.search_spaces.architecture.get_example_architecture import get_architecture
 from omegaconf import DictConfig
 
 
 
-@hydra.main(config_path="configs", config_name="mlp_smac", version_base="1.1")
+@hydra.main(config_path="configs", config_name="mlp_neps_priorband_arch", version_base="1.1")
 def nas(cfg: DictConfig):
+    if "None" in cfg.architecture:
+        raise ValueError("cfg.architecture is None")
+    
     arch_string_tree = str(cfg.architecture).replace("'", "")
+
+    print(arch_string_tree)
+    return {"loss": 1}
 
     architecture = get_architecture()
 

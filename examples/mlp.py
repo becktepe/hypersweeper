@@ -51,6 +51,11 @@ def mlp_from_cfg(cfg: DictConfig):
     lr_init = cfg.learning_rate_init or 0.001
     batch_size = cfg.batch_size or 200
 
+    return {
+        "loss": lr_init,
+        "time": batch_size
+    }
+
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=ConvergenceWarning)
 

@@ -27,8 +27,14 @@ hydra:
     loading_variable: load
     saving_variable: save
     sweeper_kwargs:
+      env_vars: 
+        NEPS_LOG_DIR: ${hydra.run.dir}
       job_array_size_limit: 1
       # seeds: [0, 1, 2]
+      slurm: false
+      slurm_timeout: 1000
+      min_budget: 10
+      max_budget: 1000
       load_tf: true
       checkpoint_tf: true
       optimizer_kwargs:
@@ -106,3 +112,6 @@ hydra:
     dir: ./tmp/${now:%Y-%m-%d}/${now:%H-%M-%S}
   sweep:
     dir: ./tmp/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+  env:
+    NEPS_LOG_DIR: ${hydra.run.dir}

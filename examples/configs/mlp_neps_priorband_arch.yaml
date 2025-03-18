@@ -22,12 +22,14 @@ save: null
 
 hydra:
   sweeper:
-    n_trials: 207
+    n_trials: 200
     budget: 22_000
     budget_variable: epochs
     loading_variable: load
     saving_variable: save
     sweeper_kwargs:
+      env_vars: 
+        NEPS_LOG_DIR: ${hydra.run.dir}
       job_array_size_limit: 1
       # seeds: [0, 1, 2]
       slurm: false
@@ -38,8 +40,12 @@ hydra:
       checkpoint_tf: true
       optimizer_kwargs:
         fidelity_variable: ${hydra.sweeper.budget_variable}
-        architecture: neps.search_spaces.architecture.get_example_architecture.get_architecture
-        architecture_default: "(S Sequential15 (C DenseCell (OPS id) (OPS id) (OPS id) (OPS id) (OPS id) (OPS id)) (C DenseCell (OPS id) (OPS id) (OPS id) (OPS id) (OPS id) (OPS id)) (C DenseCell (OPS id) (OPS id) (OPS id) (OPS id) (OPS id) (OPS id)) (C DenseCell (OPS id) (OPS id) (OPS id) (OPS id) (OPS id) (OPS id)) (C DenseCell (OPS id) (OPS id) (OPS id) (OPS id) (OPS id) (OPS id)) down (C DenseCell (OPS id) (OPS id) (OPS id) (OPS id) (OPS id) (OPS id)) (C DenseCell (OPS id) (OPS id) (OPS id) (OPS id) (OPS id) (OPS id)) (C DenseCell (OPS id) (OPS id) (OPS id) (OPS id) (OPS id) (OPS id)) (C DenseCell (OPS id) (OPS id) (OPS id) (OPS id) (OPS id) (OPS id)) (C DenseCell (OPS id) (OPS id) (OPS id) (OPS id) (OPS id) (OPS id)) down (C DenseCell (OPS id) (OPS id) (OPS id) (OPS id) (OPS id) (OPS id)) (C DenseCell (OPS id) (OPS id) (OPS id) (OPS id) (OPS id) (OPS id)) (C DenseCell (OPS id) (OPS id) (OPS id) (OPS id) (OPS id) (OPS id)) (C DenseCell (OPS id) (OPS id) (OPS id) (OPS id) (OPS id) (OPS id)) (C DenseCell (OPS id) (OPS id) (OPS id) (OPS id) (OPS id) (OPS id)))"
+        architecture: neps.search_spaces.architecture.get_example_architecture.get_cfg_architecture
+        architecture_kwargs:
+          prior_sampling_mode: distribution
+          prior_confidence: low
+        architecture_default: neps.search_spaces.architecture.get_example_architecture.get_default_cfg_architecture
+        architecture_default_kwargs: {}
         min_budget: 10
         max_budget: 1000
         seed: ${neps_seed}
@@ -47,6 +53,7 @@ hydra:
           _target_: neps.optimizers.multi_fidelity_prior.priorband.PriorBand
           _partial_: true
           budget: ${hydra.sweeper.budget}
+          prior_confidence: low
     search_space:
       seed: ${neps_seed}
       hyperparameters:
